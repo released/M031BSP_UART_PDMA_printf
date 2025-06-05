@@ -3,16 +3,14 @@
 #include <string.h>
 #include "NuMicro.h"
 
-#include <stdarg.h>
-
 #include "misc_config.h"
-// #include "retarget.h"
+#include "custom_printf.h"
 
 /*_____ D E C L A R A T I O N S ____________________________________________*/
 
 volatile struct flag_32bit flag_PROJ_CTL;
 #define FLAG_PROJ_TIMER_PERIOD_1000MS                 	(flag_PROJ_CTL.bit0)
-#define FLAG_PROJ_REVERSE1                   			(flag_PROJ_CTL.bit1)
+#define FLAG_PROJ_TIMER_PERIOD_SPECIFIC       			(flag_PROJ_CTL.bit1)
 #define FLAG_PROJ_REVERSE2                 				(flag_PROJ_CTL.bit2)
 #define FLAG_PROJ_REVERSE3                              (flag_PROJ_CTL.bit3)
 #define FLAG_PROJ_REVERSE4                              (flag_PROJ_CTL.bit4)
@@ -25,9 +23,6 @@ volatile struct flag_32bit flag_PROJ_CTL;
 
 volatile unsigned int counter_systick = 0;
 volatile uint32_t counter_tick = 0;
-
-#define UART_TX_DMA_CH                                  (4)
-volatile uint8_t pdma_uart_tx_flag = 0U;
 
 const uint8_t text_array[] =
     "The Future of Technology and Humanity\n"
@@ -50,6 +45,7 @@ const uint8_t text_array[] =
 /*_____ M A C R O S ________________________________________________________*/
 
 /*_____ F U N C T I O N S __________________________________________________*/
+extern volatile uint8_t pdma_uart_tx_flag;
 
 unsigned int get_systick(void)
 {
@@ -157,67 +153,6 @@ void delay_ms(uint16_t ms)
 	#else
 	TIMER_Delay(TIMER0, 1000*ms);
 	#endif
-}
-
-void uart_tx_send(uint8_t *ptr, uint32_t len)
-{
-    // uint32_t i = 0;
-
-    #if 1   //PDMA
-
-    pdma_uart_tx_flag = 0;
-
-
-    PDMA_Open(PDMA, (1 << UART_TX_DMA_CH));
-
-    /* UART Tx PDMA channel configuration */
-    /* Set transfer width (8 bits) and transfer count */
-    PDMA_SetTransferCnt(PDMA, UART_TX_DMA_CH, PDMA_WIDTH_8, len);
-
-    /* Set source/destination address and attributes */
-    PDMA_SetTransferAddr(PDMA, UART_TX_DMA_CH, (uint32_t)ptr, PDMA_SAR_INC, (uint32_t)&UART0->DAT, PDMA_DAR_FIX);
-
-    /* Set request source; set basic mode. */
-    PDMA_SetTransferMode(PDMA, UART_TX_DMA_CH, PDMA_UART0_TX, FALSE, 0);
-
-    /* Single request type */
-    PDMA_SetBurstType(PDMA, UART_TX_DMA_CH, PDMA_REQ_SINGLE, 0);
-
-    /* Disable table interrupt */
-    PDMA_DisableInt(PDMA,UART_TX_DMA_CH, PDMA_INT_TEMPTY );
-
-    PDMA_EnableInt(PDMA, UART_TX_DMA_CH, PDMA_INT_TRANS_DONE);
-
-    NVIC_EnableIRQ(PDMA_IRQn);
-
-    UART_ENABLE_INT(UART0,UART_INTEN_TXPDMAEN_Msk );
-
-    while(!pdma_uart_tx_flag);
-
-    PDMA_DisableInt(PDMA, UART_TX_DMA_CH, PDMA_INT_TRANS_DONE);
-    NVIC_DisableIRQ(PDMA_IRQn);
-
-    #else
-    for (i = 0; i < len; i++)
-    {
-        UART_WRITE(UART0, *ptr++);
-        UART_WAIT_TX_EMPTY(UART0);
-    }
-    #endif
-}
-
-void pdma_printf(const char * fmt, ...)
-{
-    va_list ap;
-    char buf[2048] = {0};
-    uint32_t size = 0;
-
-    va_start(ap, fmt);
-    vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    size = strlen(buf);
-
-    uart_tx_send((uint8_t *)buf, size);
 }
 
 
@@ -381,6 +316,7 @@ void TMR1_IRQHandler(void)
 
 		if ((get_tick() % 50) == 0)
 		{
+            FLAG_PROJ_TIMER_PERIOD_SPECIFIC = 1;
 
 		}	
     }
@@ -409,8 +345,12 @@ void loop(void)
         FLAG_PROJ_TIMER_PERIOD_1000MS = 0;//set_flag(flag_timer_period_1000ms ,DISABLE);
 
         // printf("%s(timer) : %4d\r\n",__FUNCTION__,LOG1++);
-        pdma_printf("%s(timer) : %4d\r\n",__FUNCTION__,LOG1++);
         PB14 ^= 1;        
+    }
+
+    if (FLAG_PROJ_TIMER_PERIOD_SPECIFIC)
+    {
+        pdma_printf("%s(timer) : %4d\r\n",__FUNCTION__,LOG1++);
     }
 }
 
@@ -565,6 +505,9 @@ int main()
 
 	GPIO_Init();
 	UART0_Init();
+
+    // uart_tx_fifo_init();
+
 	TIMER1_Init();
     check_reset_source();
 
@@ -576,7 +519,7 @@ int main()
 
     pdma_printf("%s\r\n",text_array);
     
-    pdma_printf("\r\narray size:%d\r\n",SIZEOF(text_array));
+    pdma_printf("\r\narray size:%d\r\n\r\n",SIZEOF(text_array));
 
     /* Got no where to go, just loop forever */
     while(1)
